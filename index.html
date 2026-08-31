@@ -1,21 +1,35 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
 	<head>
 		<meta charset="utf-8">
-		<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+		<meta name="apple-mobile-web-app-capable" content="yes">
+		<meta name="mobile-web-app-capable" content="yes">
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+		<meta name="screen-orientation" content="landscape">
 		<title>Mining Dive</title>
 		<style>
 html, body, #canvas {
 	margin: 0;
 	padding: 0;
 	border: 0;
+	overflow: hidden;
+	touch-action: none;
+	height: 100%;
+	height: 100dvh;
+	width: 100%;
+	width: 100dvw;
+}
+
+html, body {
+	position: fixed;
+	inset: 0;
+	overscroll-behavior: none;
 }
 
 body {
 	color: white;
 	background-color: black;
-	overflow: hidden;
-	touch-action: none;
 }
 
 #canvas {
@@ -89,6 +103,29 @@ body {
 	text-align: center;
 	z-index: 1;
 }
+
+#rotate-hint {
+	display: none;
+	position: fixed;
+	inset: 0;
+	z-index: 10000;
+	background: rgba(0, 0, 0, 0.88);
+	color: #fff;
+	font-family: 'Noto Sans JP', 'Hiragino Sans', 'Yu Gothic', sans-serif;
+	font-size: clamp(1.1rem, 4.5vw, 1.7rem);
+	letter-spacing: 0.12em;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	padding: 1.5rem;
+	touch-action: none;
+}
+
+@media (orientation: portrait) {
+	#rotate-hint {
+		display: flex;
+	}
+}
 		</style>
 		<link id="-gd-engine-icon" rel="icon" type="image/png" href="index.icon.png" />
 <link rel="apple-touch-icon" href="index.apple-touch-icon.png"/>
@@ -100,7 +137,7 @@ body {
 		</canvas>
 
 		<noscript>
-			Your browser does not support JavaScript.
+			JavaScript を有効にしてください。
 		</noscript>
 
 		<div id="status">
@@ -109,11 +146,60 @@ body {
 			<div id="status-notice"></div>
 		</div>
 
+		<div id="rotate-hint" role="dialog" aria-live="polite">画面を横にしてください</div>
+
 		<script src="index.js"></script>
 		<script>
-const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":7328932,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
+const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":17734072,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
 const GODOT_THREADS_ENABLED = false;
 const engine = new Engine(GODOT_CONFIG);
+
+(function () {
+	const hint = document.getElementById('rotate-hint');
+
+	function isLandscape() {
+		const type = (screen.orientation && screen.orientation.type) || '';
+		if (type) {
+			return type.indexOf('landscape') === 0;
+		}
+		if (window.matchMedia) {
+			return window.matchMedia('(orientation: landscape)').matches;
+		}
+		return window.innerWidth >= window.innerHeight;
+	}
+
+	function updateRotateHint() {
+		if (!hint) {
+			return;
+		}
+		const landscape = isLandscape();
+		hint.style.display = landscape ? 'none' : 'flex';
+		hint.setAttribute('aria-hidden', landscape ? 'true' : 'false');
+	}
+
+	function tryLockLandscape() {
+		try {
+			if (screen.orientation && typeof screen.orientation.lock === 'function') {
+				screen.orientation.lock('landscape').catch(function () {});
+			}
+		} catch (err) {
+			// Many browsers reject lock outside fullscreen / installed PWA.
+		}
+	}
+
+	updateRotateHint();
+	tryLockLandscape();
+	window.addEventListener('orientationchange', function () {
+		updateRotateHint();
+		tryLockLandscape();
+	});
+	window.addEventListener('resize', updateRotateHint);
+	if (screen.orientation && screen.orientation.addEventListener) {
+		screen.orientation.addEventListener('change', updateRotateHint);
+	}
+	window.addEventListener('pointerdown', tryLockLandscape, { passive: true });
+	window.addEventListener('touchend', tryLockLandscape, { passive: true });
+}());
 
 (function () {
 	const statusOverlay = document.getElementById('status');
@@ -174,7 +260,6 @@ const engine = new Engine(GODOT_CONFIG);
 			} catch (err) {
 				serviceWorkerRegistrationPromise = Promise.reject(new Error('Service worker registration failed.'));
 			}
-			// There's a chance that installing the service worker would fix the issue
 			Promise.race([
 				serviceWorkerRegistrationPromise.then((registration) => {
 					if (registration != null) {
@@ -182,18 +267,15 @@ const engine = new Engine(GODOT_CONFIG);
 					}
 					return registration;
 				}).then(() => engine.installServiceWorker()),
-				// For some reason, `getRegistration()` can stall
 				new Promise((resolve) => {
 					setTimeout(() => resolve(), 2000);
 				}),
 			]).then(() => {
-				// Reload if there was no error.
 				window.location.reload();
 			}).catch((err) => {
 				console.error('Error while registering service worker:', err);
 			});
 		} else {
-			// Display the message as usual
 			const missingMsg = 'Error\nThe following features required to run Godot projects on the Web are missing:\n';
 			displayFailureNotice(missingMsg + missing.join('\n'));
 		}
