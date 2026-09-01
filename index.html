@@ -124,10 +124,67 @@ body {
 	touch-action: none;
 }
 
+#fs-overlay {
+	display: none;
+	pointer-events: none;
+	position: fixed;
+	inset: 0;
+	z-index: 9000;
+	background: rgba(0, 0, 0, 0.78);
+	color: #fff;
+	font-family: 'Noto Sans JP', 'Hiragino Sans', 'Yu Gothic', sans-serif;
+	font-size: clamp(1.05rem, 4vw, 1.6rem);
+	letter-spacing: 0.14em;
+	align-items: center;
+	justify-content: center;
+	text-align: center;
+	padding: 1.5rem;
+	touch-action: none;
+	user-select: none;
+	-webkit-user-select: none;
+	cursor: pointer;
+}
+
+#fs-overlay.visible {
+	display: flex;
+	pointer-events: auto;
+}
+
+#fs-reenter {
+	display: none;
+	position: fixed;
+	top: max(0.65rem, env(safe-area-inset-top));
+	right: max(0.65rem, env(safe-area-inset-right));
+	z-index: 9001;
+	margin: 0;
+	padding: 0.45rem 0.9rem;
+	border: 1px solid rgba(255, 255, 255, 0.45);
+	border-radius: 999px;
+	background: rgba(0, 0, 0, 0.62);
+	color: #fff;
+	font-family: 'Noto Sans JP', 'Hiragino Sans', 'Yu Gothic', sans-serif;
+	font-size: 0.85rem;
+	letter-spacing: 0.08em;
+	cursor: pointer;
+	touch-action: manipulation;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+#fs-reenter.visible {
+	display: block;
+}
+
 @media (orientation: portrait) {
 	#rotate-hint {
 		display: flex;
 		pointer-events: auto;
+	}
+
+	#fs-overlay.visible,
+	#fs-reenter.visible {
+		display: none;
+		pointer-events: none;
 	}
 }
 		</style>
@@ -150,16 +207,24 @@ body {
 			<div id="status-notice"></div>
 		</div>
 
+		<div id="fs-overlay" role="button" tabindex="0" aria-hidden="true">タップして全画面で遊ぶ</div>
+		<button id="fs-reenter" type="button" aria-hidden="true">全画面</button>
 		<div id="rotate-hint" role="dialog" aria-live="polite">画面を横にしてください</div>
 
 		<script src="index.js"></script>
 		<script>
-const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":17739176,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
+const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":17744120,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
 const GODOT_THREADS_ENABLED = false;
 const engine = new Engine(GODOT_CONFIG);
 
 (function () {
 	const hint = document.getElementById('rotate-hint');
+	const fsOverlay = document.getElementById('fs-overlay');
+	const fsReenter = document.getElementById('fs-reenter');
+	const canvas = document.getElementById('canvas');
+
+	let gameReady = false;
+	let overlayDismissed = false;
 
 	function isLandscape() {
 		const type = (screen.orientation && screen.orientation.type) || '';
@@ -172,14 +237,60 @@ const engine = new Engine(GODOT_CONFIG);
 		return window.innerWidth >= window.innerHeight;
 	}
 
-	function updateRotateHint() {
-		if (!hint) {
-			return;
+	function hasFullscreenApi(el) {
+		if (!el) {
+			return false;
 		}
-		const landscape = isLandscape();
-		hint.style.display = landscape ? 'none' : 'flex';
-		hint.style.pointerEvents = landscape ? 'none' : 'auto';
-		hint.setAttribute('aria-hidden', landscape ? 'true' : 'false');
+		return typeof (el.requestFullscreen
+			|| el.webkitRequestFullscreen
+			|| el.webkitRequestFullScreen
+			|| el.mozRequestFullScreen
+			|| el.msRequestFullscreen) === 'function';
+	}
+
+	function canFullscreen() {
+		return hasFullscreenApi(document.documentElement) || hasFullscreenApi(canvas);
+	}
+
+	function fullscreenElement() {
+		return document.fullscreenElement
+			|| document.webkitFullscreenElement
+			|| document.mozFullScreenElement
+			|| document.msFullscreenElement
+			|| null;
+	}
+
+	function isFullscreen() {
+		return !!fullscreenElement();
+	}
+
+	function requestFullscreenOn(el) {
+		if (!el) {
+			return Promise.reject(new Error('no element'));
+		}
+		const fn = el.requestFullscreen
+			|| el.webkitRequestFullscreen
+			|| el.webkitRequestFullScreen
+			|| el.mozRequestFullScreen
+			|| el.msRequestFullscreen;
+		if (typeof fn !== 'function') {
+			return Promise.reject(new Error('no fullscreen'));
+		}
+		try {
+			const result = fn.call(el);
+			if (result && typeof result.then === 'function') {
+				return result;
+			}
+			return Promise.resolve();
+		} catch (err) {
+			return Promise.reject(err);
+		}
+	}
+
+	function enterFullscreen() {
+		return requestFullscreenOn(document.documentElement).catch(function () {
+			return requestFullscreenOn(canvas);
+		});
 	}
 
 	function tryLockLandscape() {
@@ -192,15 +303,124 @@ const engine = new Engine(GODOT_CONFIG);
 		}
 	}
 
+	function setVisible(el, visible) {
+		if (!el) {
+			return;
+		}
+		if (visible) {
+			el.classList.add('visible');
+			el.setAttribute('aria-hidden', 'false');
+		} else {
+			el.classList.remove('visible');
+			el.setAttribute('aria-hidden', 'true');
+		}
+	}
+
+	function updateRotateHint() {
+		if (!hint) {
+			return;
+		}
+		const landscape = isLandscape();
+		hint.style.display = landscape ? 'none' : 'flex';
+		hint.style.pointerEvents = landscape ? 'none' : 'auto';
+		hint.setAttribute('aria-hidden', landscape ? 'true' : 'false');
+	}
+
+	function updateFullscreenUi() {
+		const landscape = isLandscape();
+		const fs = isFullscreen();
+		const api = canFullscreen();
+
+		// No Fullscreen API (typical iOS Safari): never show 全画面 copy, just play.
+		const showOverlay = gameReady && !overlayDismissed && landscape && api && !fs;
+		const showReenter = gameReady && overlayDismissed && landscape && api && !fs;
+		setVisible(fsOverlay, showOverlay);
+		setVisible(fsReenter, showReenter);
+	}
+
+	function hideOverlayAndPlay() {
+		overlayDismissed = true;
+		setVisible(fsOverlay, false);
+		if (canvas && typeof canvas.focus === 'function') {
+			canvas.focus();
+		}
+		updateFullscreenUi();
+	}
+
+	function onFirstFullscreenGesture(ev) {
+		if (overlayDismissed) {
+			return;
+		}
+		if (ev) {
+			ev.preventDefault();
+			ev.stopPropagation();
+		}
+		const request = enterFullscreen();
+		hideOverlayAndPlay();
+		request.then(function () {
+			tryLockLandscape();
+			updateFullscreenUi();
+		}).catch(function () {
+			updateFullscreenUi();
+		});
+	}
+
+	function onReenter(ev) {
+		if (ev) {
+			ev.preventDefault();
+			ev.stopPropagation();
+		}
+		enterFullscreen().then(function () {
+			tryLockLandscape();
+			updateFullscreenUi();
+		}).catch(function () {
+			updateFullscreenUi();
+		});
+	}
+
+	window.__miningDiveOnGameReady = function () {
+		gameReady = true;
+		if (!canFullscreen()) {
+			overlayDismissed = true;
+		}
+		updateFullscreenUi();
+	};
+
+	if (fsOverlay) {
+		fsOverlay.addEventListener('click', onFirstFullscreenGesture);
+	}
+	if (fsReenter) {
+		fsReenter.addEventListener('click', onReenter);
+	}
+
+	['fullscreenchange', 'webkitfullscreenchange', 'mozfullscreenchange', 'MSFullscreenChange'].forEach(function (name) {
+		document.addEventListener(name, function () {
+			if (isFullscreen()) {
+				overlayDismissed = true;
+				setVisible(fsOverlay, false);
+				tryLockLandscape();
+			}
+			updateFullscreenUi();
+		});
+	});
+
 	updateRotateHint();
+	updateFullscreenUi();
 	tryLockLandscape();
 	window.addEventListener('orientationchange', function () {
 		updateRotateHint();
+		updateFullscreenUi();
 		tryLockLandscape();
 	});
-	window.addEventListener('resize', updateRotateHint);
+	window.addEventListener('resize', function () {
+		updateRotateHint();
+		updateFullscreenUi();
+	});
 	if (screen.orientation && screen.orientation.addEventListener) {
-		screen.orientation.addEventListener('change', updateRotateHint);
+		screen.orientation.addEventListener('change', function () {
+			updateRotateHint();
+			updateFullscreenUi();
+		});
 	}
 	window.addEventListener('pointerdown', tryLockLandscape, { passive: true });
 	window.addEventListener('touchend', tryLockLandscape, { passive: true });
@@ -223,6 +443,9 @@ const engine = new Engine(GODOT_CONFIG);
 			statusOverlay.style.pointerEvents = 'none';
 			statusOverlay.remove();
 			initializing = false;
+			if (typeof window.__miningDiveOnGameReady === 'function') {
+				window.__miningDiveOnGameReady();
+			}
 			return;
 		}
 		statusOverlay.style.visibility = 'visible';
